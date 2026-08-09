@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { dirname, join } from "path";
 import { createLocalOperatorFiles, loadGeneratedEnvironment, type LocalSetupOptions } from "../src/setup";
+import { loadDeclarativePolicyFile } from "../src/policy/loader";
 
 const options: LocalSetupOptions = {
   mode: "monitor",
@@ -46,6 +47,12 @@ describe("guided local setup", () => {
     expect(environment).toContain(`AGENTWALL_AUDIT_FILE=${result.auditPath}`);
     expect(result.dashboardUrl).toBe("http://127.0.0.1:3000");
     expect(result.created).toBe(true);
+  });
+
+  it("writes a policy that the AgentWall service can load with no approved hosts", () => {
+    const result = createLocalOperatorFiles(temporaryDirectory(), options);
+
+    expect(() => loadDeclarativePolicyFile(result.policyPath)).not.toThrow();
   });
 
   it("does not replace an existing config without force", () => {

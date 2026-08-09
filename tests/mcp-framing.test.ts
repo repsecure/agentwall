@@ -164,14 +164,14 @@ describe("createFrameParser", () => {
     const parser = createFrameParser();
     parser.push(serializeFrame(request));
 
-    expect(parser.flush()).toEqual({ frames: [], malformed: [] });
+    expect(parser.flush()).toEqual({ frames: [], malformed: [], events: [] });
   });
 
   it("returns nothing at flush when only whitespace is pending", () => {
     const parser = createFrameParser();
     parser.push(Buffer.from("  \t", "utf8"));
 
-    expect(parser.flush()).toEqual({ frames: [], malformed: [] });
+    expect(parser.flush()).toEqual({ frames: [], malformed: [], events: [] });
   });
 });
 

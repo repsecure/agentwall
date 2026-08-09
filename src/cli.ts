@@ -1130,10 +1130,15 @@ function formatConnectionError(baseUrl: string, endpoint: string, error: unknown
 async function requestJson<T>(method: string, endpoint: string, body?: unknown, flags: CliFlags = {}): Promise<T> {
   const baseUrl = createBaseUrl(flags);
   let response: Response;
+  const generatedEnvironment = loadGeneratedEnvironment(process.cwd());
+  const operatorTokenValue = process.env.AGENTWALL_OPERATOR_TOKEN ?? generatedEnvironment.AGENTWALL_OPERATOR_TOKEN;
+  const headers: Record<string, string> = {};
+  if (operatorTokenValue) headers.authorization = `Bearer ${operatorTokenValue}`;
+  if (body) headers["content-type"] = "application/json";
   try {
     response = await fetch(`${baseUrl}${endpoint}`, {
       method,
-      headers: body ? { "content-type": "application/json" } : undefined,
+      headers: Object.keys(headers).length > 0 ? headers : undefined,
       body: body ? JSON.stringify(body) : undefined,
     });
   } catch (error) {

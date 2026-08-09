@@ -15,10 +15,15 @@ import {
   resolveApprovalMode,
 } from "../src/cli";
 
+const previousOperatorToken = process.env.AGENTWALL_OPERATOR_TOKEN;
 describe("Agentwall CLI helpers", () => {
   afterEach(() => {
-    jest.restoreAllMocks();
     delete (global as { fetch?: unknown }).fetch;
+    if (previousOperatorToken === undefined) {
+      delete process.env.AGENTWALL_OPERATOR_TOKEN;
+    } else {
+      process.env.AGENTWALL_OPERATOR_TOKEN = previousOperatorToken;
+    }
   });
 
   it("parses flags and positional arguments together", () => {
@@ -740,12 +745,16 @@ describe("Agentwall CLI helpers", () => {
     }));
     (global as { fetch?: unknown }).fetch = fetchMock;
     const logSpy = jest.spyOn(console, "log").mockImplementation(() => undefined);
+    process.env.AGENTWALL_OPERATOR_TOKEN = "test-operator-token";
 
     await commandStatus({ url: "http://127.0.0.1:3000", json: true });
 
     expect(fetchMock).toHaveBeenCalledWith(
       "http://127.0.0.1:3000/api/dashboard/state",
-      expect.objectContaining({ method: "GET" })
+      expect.objectContaining({
+        method: "GET",
+        headers: { authorization: "Bearer test-operator-token" },
+      })
     );
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('"brand": "Agentwall"'));
   });

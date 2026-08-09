@@ -73,40 +73,45 @@ export function createStarterConfig(input: OnboardingOptions): { config: Agentwa
     },
   };
 
+  const rules: Array<Record<string, unknown>> = [
+    {
+      id: "starter:untrusted-web-egress",
+      description: "Require review when untrusted web content drives outbound actions",
+      plane: "content",
+      match: {
+        provenance: {
+          source: ["web"],
+          trustLabel: ["untrusted", "derived"],
+        },
+        flow: {
+          direction: "egress",
+          labels: ["external_egress"],
+        },
+      },
+      decision: mode === "monitor" ? "allow" : "approve",
+      riskLevel: "high",
+      reason: "Untrusted web content is driving outbound activity",
+    },
+  ];
+
+  if (config.egress.allowedHosts.length > 0) {
+    rules.push({
+      id: "starter:allow-approved-hosts",
+      description: "Allow explicitly approved egress destinations",
+      plane: "network",
+      match: {
+        type: "hostname-equals",
+        values: config.egress.allowedHosts,
+      },
+      decision: "allow",
+      riskLevel: "low",
+      reason: "Approved destination",
+    });
+  }
+
   const policy = {
     version: "1",
-    rules: [
-      {
-        id: "starter:untrusted-web-egress",
-        description: "Require review when untrusted web content drives outbound actions",
-        plane: "content",
-        match: {
-          provenance: {
-            source: ["web"],
-            trustLabel: ["untrusted", "derived"],
-          },
-          flow: {
-            direction: "egress",
-            labels: ["external_egress"],
-          },
-        },
-        decision: mode === "monitor" ? "allow" : "approve",
-        riskLevel: "high",
-        reason: "Untrusted web content is driving outbound activity",
-      },
-      {
-        id: "starter:allow-approved-hosts",
-        description: "Allow explicitly approved egress destinations",
-        plane: "network",
-        match: {
-          type: "hostname-equals",
-          values: config.egress.allowedHosts,
-        },
-        decision: "allow",
-        riskLevel: "low",
-        reason: "Approved destination",
-      },
-    ],
+    rules,
   };
 
   return { config, policy };
