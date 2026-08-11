@@ -24,8 +24,8 @@ These controls exist now. Their stated limits also apply now.
 - **Local evidence:** AgentWall can write hash-chained audit files, seal segments, sign checkpoints, and verify the result locally.
 - **Fleet evidence:** A read-only view checks operator-delivered host files. AgentWall does not provide a managed evidence service or retention policy.
 - **Deployment:** The repository includes a container build and local package paths. It does not include supported Kubernetes admission control.
-- **Release pipeline:** The workflow creates an SBOM and SLSA provenance. It uses OIDC for publication and signs the container image digest.
-- **Release limits:** OIDC protects publication only. The workflow does not give every release asset a separate signature.
+- **Release pipeline:** The workflow creates a release hash inventory, an SBOM, and SLSA provenance. It uses OIDC for publication and signs the container image digest.
+- **Release limits:** The hash inventory checks listed files. The official manifest is unsigned and does not include the outer checksum or provenance files. The workflow does not give every release asset a separate signature.
 - **Assurance:** Several verifier implementations use one conformance corpus. This does not constitute an independent external security review.
 
 ## Planned stages

@@ -279,6 +279,8 @@ describeLinux("fleet credential lifecycle, measured end to end", () => {
         `port: ${apiPort}`,
         `host: 127.0.0.1`,
         `logLevel: silent`,
+        `approval:`,
+        `  backend: memory`,
         `enforcement:`,
         `  mode: strict`,
         `egress:`,

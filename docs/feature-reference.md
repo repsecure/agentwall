@@ -218,6 +218,18 @@ It skips one file above 64 MB and states the limit.
 The fleet view does not merge host chains.
 An unreachable host never appears clean.
 
+## Release manifest
+
+`agentwall release-manifest` creates a sorted file inventory with SHA-256 digests and byte sizes.
+The command can sign the inventory with an Ed25519 key that the operator supplies.
+`agentwall verify-release` checks the manifest and every listed file without network access.
+
+Official releases use an unsigned inventory and keyless SLSA provenance.
+Local signed bundles can use a public-key pin to check signer identity.
+
+**Limit:** The verifier does not report extra files in the artifact directory.
+Use `checksums.txt` and SLSA verification to check the complete official release.
+
 ## Operator authorization
 
 All non-health service routes require operator authorization unless a route is explicitly public.

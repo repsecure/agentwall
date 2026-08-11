@@ -41,6 +41,7 @@ It uses `agentwall ui` as the first-run path.
 ## Verify evidence
 
 - [Audit format](audit-format.md) defines record hashing, segment links, checkpoints, and proofs.
+- [Release manifest](release-manifest-format.md) explains release file hashes, local signatures, and keyless provenance.
 - [Verification](verification.md) defines each verification layer and conformance case.
 - [Evidence viewer](evidence-viewer.md) explains the read-only view at `/evidence`.
 - [Fleet evidence](fleet-evidence.md) explains independent host-chain checks at `/evidence/fleet`.

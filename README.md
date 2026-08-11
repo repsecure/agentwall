@@ -103,7 +103,7 @@ See the [architecture](docs/architecture.md) for request paths, control paths, a
 - The [verification design](docs/verification.md) covers TypeScript, Go, Rust, and Python verifier implementations.
 - The [conformance harness](scripts/conformance.js) runs the same forgery corpus across all four implementations.
 - The [CodeQL workflow](.github/workflows/codeql.yml) and [gitleaks workflow](.github/workflows/security.yml) define static and secret scans.
-- The [release workflow](.github/workflows/release.yml) defines checksums and provenance for approved releases. Its presence does not prove a public package exists.
+- The [release workflow](.github/workflows/release.yml) defines a release hash inventory, checksums, and provenance for approved releases. Its presence does not prove a public package exists.
 - The [threat model](docs/threat-model.md) and [limits](docs/limits.md) state the protected and unprotected paths.
 
 ### Trust boundaries

@@ -29,6 +29,8 @@
     "check:readme": "node scripts/check-readme.js README.md",
     "lint": "tsc --noEmit",
     "cli": "node dist/cli.js",
+    "release:manifest": "node dist/cli.js release-manifest",
+    "verify:release": "node dist/cli.js verify-release",
     "init": "node dist/cli.js init",
     "doctor": "node dist/cli.js doctor",
     "verify:live": "bash ./scripts/verify-live.sh"

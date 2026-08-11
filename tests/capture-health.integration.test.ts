@@ -210,6 +210,8 @@ describeLinux("doctor reports capture from a chain a real server wrote", () => {
         `port: ${apiPort}`,
         `host: 127.0.0.1`,
         `logLevel: silent`,
+        `approval:`,
+        `  backend: memory`,
         `enforcement:`,
         `  mode: strict`,
         `egress:`,

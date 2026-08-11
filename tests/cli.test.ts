@@ -14,6 +14,7 @@ import {
   reportCliFailure,
   resolveApprovalMode,
 } from "../src/cli";
+import { spawnSync } from "child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -75,6 +76,23 @@ function temporaryOperatorDirectory(options: { host: string; port: number; token
   return directory;
 }
 
+function runCli(...args: string[]): { status: number; stdout: string; stderr: string } {
+  const result = spawnSync(
+    process.execPath,
+    ["-r", "ts-node/register", join(__dirname, "..", "src", "cli.ts"), ...args],
+    {
+      cwd: join(__dirname, ".."),
+      encoding: "utf8",
+      env: { ...process.env, TS_NODE_TRANSPILE_ONLY: "1" },
+    },
+  );
+  return {
+    status: result.status ?? -1,
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? "",
+  };
+}
+
 describe("Agentwall CLI helpers", () => {
   afterEach(() => {
     delete (global as { fetch?: unknown }).fetch;
@@ -112,6 +130,57 @@ describe("Agentwall CLI helpers", () => {
     expect(log).toHaveBeenCalledWith(expect.stringContaining("setup               Create safe local operator files"));
     expect(log).toHaveBeenCalledWith(expect.stringContaining("ui                  Start the loopback setup"));
     expect(log).toHaveBeenCalledWith(expect.stringContaining("--service-port <port>"));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("start               Start Agentwall server"));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("release-manifest    Write a SHA-256 inventory"));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("--proxy <url>"));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("--generated-at <iso>"));
+  });
+
+  it("creates and verifies an unsigned release manifest through the CLI", () => {
+    const root = mkdtempSync(join(tmpdir(), "agentwall-release-cli-"));
+    temporaryDirectories.push(root);
+    const artifacts = join(root, "artifacts");
+    const manifest = join(artifacts, "release-manifest.json");
+    mkdirSync(artifacts);
+    writeFileSync(join(artifacts, "artifact.txt"), "cli smoke\n");
+
+    const created = runCli(
+      "release-manifest",
+      "--input",
+      artifacts,
+      "--output",
+      manifest,
+      "--version",
+      "1.2.3",
+      "--generated-at",
+      "2026-08-06T00:00:00.000Z",
+    );
+    expect(created.status).toBe(0);
+    expect(created.stdout).toContain("Release manifest created:");
+
+    const verified = runCli("verify-release", "--manifest", manifest, "--artifacts", artifacts);
+    expect(verified.status).toBe(0);
+    expect(verified.stdout).toContain("Release manifest verified: 1.2.3");
+    expect(verified.stdout).toContain("Artifacts verified: 1");
+  });
+
+  it("returns usage exit code 2 for an invalid release timestamp", () => {
+    const root = mkdtempSync(join(tmpdir(), "agentwall-release-cli-"));
+    temporaryDirectories.push(root);
+    const artifacts = join(root, "artifacts");
+    mkdirSync(artifacts);
+    writeFileSync(join(artifacts, "artifact.txt"), "cli smoke\n");
+
+    const result = runCli(
+      "release-manifest",
+      "--input",
+      artifacts,
+      "--generated-at",
+      "not-a-timestamp",
+    );
+
+    expect(result.status).toBe(2);
+    expect(`${result.stdout}${result.stderr}`).toContain("--generated-at must be a valid ISO timestamp.");
   });
 
   it("prints a fatal command error before exiting", () => {

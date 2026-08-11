@@ -27,6 +27,10 @@ import { PolicyEngine } from "./policy/engine";
 import { meetsNodeFloor, nodeFloor, packageVersion } from "./version";
 import { AgentRegistry, type AgentMatchSignal, type RegisteredAgent } from "./fleet/registry";
 import { readCaptureHealth, type CaptureHealth, type CaptureWatermark } from "./evidence/capture";
+import {
+  generateReleaseManifest,
+  verifyReleaseManifest,
+} from "./release/manifest";
 
 type CliFlags = Record<string, string | boolean>;
 const BOOLEAN_FLAGS = new Set(["lan", "force", "json", "confirm"]);
@@ -118,6 +122,8 @@ Commands:
   anchor              Seal audit segments, sign a checkpoint, submit it off-box
   verify              Check the three audit integrity layers independently
   verify-capture      Prove one agent's traffic really passes through Agentwall
+  release-manifest    Write a SHA-256 inventory for a release artifact directory
+  verify-release      Check a release manifest and its listed files offline
   mcp wrap            Wrap a local MCP server and gate its stdio traffic
   mcp stop <wrapper-id>  Stop one MCP HTTP wrapper managed by Agentwall
   mcp status             List managed MCP HTTP wrappers
@@ -253,6 +259,16 @@ Verify-capture options:
   --timeout <ms>                      How long to wait for the fetch (default: 120000)
   --settle-ms <ms>                    How long to wait for the chain to catch up (default: 3000)
   --json                              Print the whole report as JSON
+
+Release manifest options:
+  --input <dir>                       Directory that holds release artifacts
+  --output <path>                     Manifest path (default: <input>/release-manifest.json)
+  --key-file <path>                   Existing Ed25519 private key for local signing
+  --version <version>                 Release version (default: package version)
+  --generated-at <iso>                Manifest timestamp (required for reproducible releases)
+  --manifest <path>                   Manifest path for verify-release
+  --artifacts <dir>                   Artifact directory for verify-release (default: manifest directory)
+  --public-key <base64>               Expected DER SPKI public key for verify-release
 `);
 }
 
@@ -1898,6 +1914,80 @@ async function commandIntercept(args: string[]): Promise<void> {
   process.exit(await runInterceptCommand(args));
 }
 
+class CliUsageError extends Error {}
+
+function requiredStringFlag(flags: CliFlags, name: string): string {
+  const value = flags[name];
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new CliUsageError(`--${name} is required.`);
+  }
+  return value;
+}
+
+function optionalStringFlag(flags: CliFlags, name: string): string | undefined {
+  const value = flags[name];
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new CliUsageError(`--${name} needs a value.`);
+  }
+  return value;
+}
+
+function rejectPositionals(positionals: string[], command: string): void {
+  if (positionals.length > 0) {
+    throw new CliUsageError(`Unexpected ${command} argument: ${positionals[0]}.`);
+  }
+}
+
+function commandReleaseManifest(flags: CliFlags, positionals: string[]): void {
+  rejectPositionals(positionals, "release-manifest");
+  const artifactDir = requiredStringFlag(flags, "input");
+  const keyPath = optionalStringFlag(flags, "key-file");
+  const outputPath = optionalStringFlag(flags, "output") ?? path.join(artifactDir, "release-manifest.json");
+  const version = optionalStringFlag(flags, "version") ?? packageVersion;
+  const generatedAtText = optionalStringFlag(flags, "generated-at");
+  let now: (() => Date) | undefined;
+  if (generatedAtText) {
+    const generatedAt = new Date(generatedAtText);
+    if (Number.isNaN(generatedAt.getTime())) {
+      throw new CliUsageError("--generated-at must be a valid ISO timestamp.");
+    }
+    now = () => generatedAt;
+  }
+  const manifest = generateReleaseManifest({ artifactDir, outputPath, keyPath, version, now });
+  console.log(`Release manifest created: ${path.resolve(outputPath)}`);
+  console.log(`Release version: ${manifest.version}`);
+  console.log(`Artifacts listed: ${manifest.artifacts.length}`);
+  console.log(manifest.signature ? `Release signature: ${manifest.publicKey}` : "Release signature: none (use release provenance)");
+}
+
+function commandVerifyRelease(flags: CliFlags, positionals: string[]): void {
+  rejectPositionals(positionals, "verify-release");
+  const manifestPath = requiredStringFlag(flags, "manifest");
+  const publicKeyPin = optionalStringFlag(flags, "public-key");
+  const result = verifyReleaseManifest({
+    manifestPath,
+    artifactsDir: optionalStringFlag(flags, "artifacts"),
+    publicKeyPin,
+  });
+  if (result.ok) {
+    console.log(`Release manifest verified: ${result.version ?? "unknown"}`);
+    console.log(`Artifacts verified: ${result.verifiedArtifacts}`);
+    if (result.signatureStatus === "unsigned") {
+      console.log("The manifest is unsigned. Verify this manifest against release provenance before trusting its file list.");
+    } else if (publicKeyPin) {
+      console.log("The public key matches the pin.");
+    } else {
+      console.log("The public key is not pinned. This check proves file integrity, not signer identity.");
+    }
+    return;
+  }
+  console.error("Release manifest verification failed.");
+  for (const problem of result.problems) console.error(`- ${problem}`);
+  process.exit(1);
+}
+
+
 /**
  * `agentwall why` - re-run the scanners against a subject and print what fired.
  *
@@ -1920,7 +2010,7 @@ function commandWhy(flags: CliFlags, positionals: string[]): void {
 
 export function reportCliFailure(error: unknown): never {
   console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
+  process.exit(error instanceof CliUsageError ? 2 : 1);
 }
 
 async function main() {
@@ -2003,6 +2093,12 @@ async function main() {
       // own command line, and parseFlags() splits on whitespace-free tokens in a way that would
       // hand the capture parser a command that is no longer the one the operator typed.
       process.exit(await runVerifyCaptureCommand(args));
+    case "release-manifest":
+      commandReleaseManifest(flags, positionals);
+      return;
+    case "verify-release":
+      commandVerifyRelease(flags, positionals);
+      return;
     case "mcp":
       // Raw args, not the parsed flags: the wrapped server's own options are on this line and
       // parseFlags() has already read them as if they were ours.

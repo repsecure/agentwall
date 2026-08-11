@@ -395,6 +395,20 @@ jobs:
             exit 1
           fi
           echo "all ${declared} formula digests appear in SHA256SUMS-verifier.txt"
+      # The manifest is a hash inventory, not a second release key. The checksum file covers the
+      # manifest, and the SLSA provenance job signs the complete checksum subject list with OIDC.
+      # This keeps the release keyless and gives operators one external trust path to verify.
+      - name: Generate release manifest
+        run: |
+          set -euo pipefail
+          node dist/cli.js release-manifest \
+            --input dist-release \
+            --output dist-release/release-manifest.json \
+            --version "${VERSION}" \
+            --generated-at "$(git -c log.showSignature=false log -1 --format=%cI)"
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+
       # Sorted with a fixed collation so the file is byte-identical across runs of the same
       # inputs, and so the SLSA subject list below is stable.
       #

@@ -149,6 +149,8 @@ describeLinux("verify-capture, measured against a real proxy", () => {
         `port: ${apiPort}`,
         `host: 127.0.0.1`,
         `logLevel: silent`,
+        `approval:`,
+        `  backend: memory`,
         `enforcement:`,
         // Monitor, so the canary on loopback is actually reached and the "did it arrive here,
         // and by which route" question has two possible answers. Strict would deny the canary

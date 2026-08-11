@@ -182,7 +182,7 @@ Run the check from the download directory. A checksum proves file consistency. I
 
 ### Check downloaded release assets
 
-**Goal:** Check all present assets against a release manifest.
+**Goal:** Check all present assets against the release checksum list.
 
 **Command:**
 
@@ -196,22 +196,45 @@ shasum -a 256 --ignore-missing -c SHA256SUMS-verifier.txt    # same, on macOS
 
 **Common fix:** Use `--ignore-missing` when you did not download every listed asset.
 
-### Check release provenance
+### Check the release manifest
 
-**Goal:** Confirm that the release workflow built the binary from the stated tag.
+**Goal:** Check every file listed in the release manifest without network access.
 
 **Command:**
 
 ```bash
+agentwall verify-release --manifest release-manifest.json
+```
+
+**Expected result:** Agentwall reports that the manifest and each listed file pass.
+
+**Trust limit:** This command checks local file integrity. It does not authenticate an unsigned manifest or report extra files in the directory.
+
+**Common fix:** Run the command from the release directory, or add `--artifacts <directory>`.
+
+### Check release provenance
+
+**Goal:** Confirm that the release workflow built the manifest and binary from the stated tag.
+
+**Command:**
+
+```bash
+slsa-verifier verify-artifact release-manifest.json \
+  --provenance-path <the .intoto.jsonl asset from the release> \
+  --source-uri github.com/repsecure/agentwall \
+  --source-tag v0.2.0
+
 slsa-verifier verify-artifact agentwall-verify-linux-amd64 \
   --provenance-path <the .intoto.jsonl asset from the release> \
   --source-uri github.com/repsecure/agentwall \
   --source-tag v0.2.0
 ```
 
-**Expected result:** `slsa-verifier` accepts the workflow identity, repository, and tag.
+**Expected result:** `slsa-verifier` accepts the workflow identity, repository, and tag for both files.
 
 **Common fix:** Use the provenance asset and source tag from the same release.
+
+This check authenticates the manifest file list. The previous checksum command only checks file consistency.
 
 This check trusts the release platform identity and its signature service.
 

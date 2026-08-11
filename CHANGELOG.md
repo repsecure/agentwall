@@ -8,6 +8,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [Unreleased]
 
 ### Added
+- Release manifest support. `agentwall release-manifest` creates a sorted SHA-256 inventory. It
+  can add an Ed25519 signature with an operator-supplied key. `agentwall verify-release` checks
+  the inventory offline. Official releases use keyless SLSA provenance instead of a CI private key.
 - `agentwall verify-capture --agent <id>`, which proves one declared agent's traffic actually
   passes through AgentWall instead of assuming it because the configuration looks right. It binds
   a single-use canary on an ephemeral loopback port with a 256-bit token in its path, drives the
@@ -314,8 +317,10 @@ decision, policy file, or enforcement behavior moved in this release.
   Note what each download check buys: `sha256sum -c` against a
   `checksums.txt` fetched from the same release page proves the download is intact, and proves
   nothing about whether the release itself is honest, since both files came down the same channel.
-  Verifying the SLSA provenance with `slsa-verifier` raises that to "this workflow built it from
-  this tag", and rebuilding from source removes us from the chain entirely. Full procedure in
+  Verify the release manifest with `slsa-verifier` before running `agentwall verify-release`; then
+  the attested manifest file list lets the offline verifier check every listed release asset.
+  Verifying the SLSA provenance also raises the binary check to "this workflow built it from this
+  tag", and rebuilding from source removes us from the chain entirely. Full procedure in
   [docs/install.md](docs/install.md#verify-a-downloaded-verifier-binary).
 - A 26 case conformance corpus covering valid evidence, forgeries, and boundary conditions, run
   through both verifiers on every commit. The two agree on all 26 cases and the harness declares
