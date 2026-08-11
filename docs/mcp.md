@@ -168,6 +168,10 @@ malformed frame, and not forwarded: bytes AgentWall could not parse are bytes it
 and sending them upstream to see what the server makes of them is the delegation this listener
 exists to prevent.
 
+On stdio, AgentWall returns a JSON-RPC error with code `-32001` when the server sends malformed or invalidly framed input.
+The error uses a `null` id because the input has no trusted, correlatable id.
+AgentWall records a deny decision and sends no invalid bytes to the client or server.
+
 ### What a block looks like on HTTP
 
 A blocked frame comes back as the same JSON-RPC error the stdio path produces, on the same id, with
@@ -193,7 +197,7 @@ gate that needs to see what the earlier gates found.
 
 | Gate | Applies to | What it checks |
 | --- | --- | --- |
-| `frame_integrity` | every frame | The JSON-RPC envelope: the version is exactly `2.0`, a request carries a method, a response carries exactly one of result or error. Everything here is a property of the envelope, so it holds before anything inside the frame is trusted. The frame-size ceiling and the newline delimiting are enforced earlier still, by the parser: a line that does not parse never becomes a frame and is never forwarded. |
+| `frame_integrity` | every frame | The JSON-RPC envelope: the version is exactly `2.0`, a request carries a method, and a response carries exactly one of `result` or `error`. An invalid server-to-client stdio line receives a `-32001` error. AgentWall does not forward an invalid line. The frame-size ceiling and newline delimiting run before this gate. |
 | `tool_inventory` | `tools/list` results | Every advertised descriptor is injection-scanned. Agentwall compares the complete standard descriptor, including input and output schemas, annotations, icons, and metadata. New, removed, or changed fields are drift. A malformed page is denied before it crosses the boundary. |
 | `input_scan` | `tools/call` requests | The call's arguments, serialized first so nested structures get the same treatment as top-level strings, then run through the secret and PII scanner and the injection patterns across every normalization pass (zero-width characters, homoglyphs, leetspeak, whitespace, base64, hex). Normalization is why an obfuscated instruction trips the same pattern as a plain one. Secrets redact rather than deny: the call is usually legitimate and the credential inside it is the problem. |
 | `policy` | every frame | The existing PolicyEngine, on the existing rules, with the frame expressed as an `AgentContext` and the earlier gates' findings attached as metadata. Tool calls are the `tool` plane; tool results are the `content` plane, tagged untrusted tool output. There is no separate MCP rule language. The engine's default-deny for actions no rule models is deliberately not inherited here: a frame no rule describes is recorded as a miss, and an operator who wants default-deny for MCP writes it as a rule, so the audit record can name the rule that decided. |

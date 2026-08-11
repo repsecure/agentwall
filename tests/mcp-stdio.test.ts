@@ -15,6 +15,16 @@ import { FrameAction, FrameDirection, JsonRpcFrame, MCP_BLOCKED_ERROR_CODE } fro
  * observed rather than asserted about a stub.
  */
 const ECHO_SERVER = [process.execPath, "-e", "process.stdin.pipe(process.stdout)"];
+const MALFORMED_SERVER = [
+  process.execPath,
+  "-e",
+  "process.stdin.resume(); process.stdin.on('end', () => process.stdout.write('{\"jsonrpc\":\"2.0\",\"id\":22\\n'));",
+];
+const MIXED_SERVER = [
+  process.execPath,
+  "-e",
+  "process.stdin.resume(); process.stdin.on('end', () => process.stdout.write('{\"jsonrpc\":\"2.0\",\"id\":22,\"result\":{\"ok\":true}}\\n{\"jsonrpc\":\"2.0\",\"id\":22\\n'));",
+];
 
 interface Harness {
   stdin: PassThrough;
@@ -267,6 +277,95 @@ describe("runStdioWrapper", () => {
     ]);
     expect(h.echoed).toEqual([good]);
     expect(h.clientFrames()).toEqual([good]);
+  });
+
+  it("returns a protocol error when the server emits a truncated response", async () => {
+    const h = harness();
+    const malformed: Array<[string, FrameDirection]> = [];
+    const request: JsonRpcFrame = { jsonrpc: "2.0", id: 22, method: "tools/call" };
+
+    const exit = runStdioWrapper({
+      command: MALFORMED_SERVER,
+      onClientFrame: forward,
+      onServerFrame: forward,
+      onMalformed: (raw, direction) => malformed.push([raw, direction]),
+      onMalformedResponse: (raw, direction) =>
+        direction === "server_to_client"
+          ? {
+              jsonrpc: "2.0",
+              id: null,
+              error: {
+                code: MCP_BLOCKED_ERROR_CODE,
+                message: "agentwall: malformed MCP response blocked",
+                data: { gate: "frame_integrity" },
+              },
+            }
+          : undefined,
+      stdin: h.stdin,
+      stdout: h.stdout,
+      stderr: h.stderr,
+    });
+
+    h.stdin.write(serializeFrame(request));
+    h.stdin.end();
+
+    expect(await exit).toBe(0);
+    expect(malformed).toEqual([[`{"jsonrpc":"2.0","id":22`, "server_to_client"]]);
+    expect(h.clientFrames()).toEqual([
+      {
+        jsonrpc: "2.0",
+        id: null,
+        error: {
+          code: MCP_BLOCKED_ERROR_CODE,
+          message: "agentwall: malformed MCP response blocked",
+          data: { gate: "frame_integrity" },
+        },
+      },
+    ]);
+  });
+
+  it("preserves wire order when a valid response and malformed line share a chunk", async () => {
+    const h = harness();
+    const malformed: Array<[string, FrameDirection]> = [];
+    const request: JsonRpcFrame = { jsonrpc: "2.0", id: 22, method: "tools/call" };
+    const response: JsonRpcFrame = { jsonrpc: "2.0", id: 22, result: { ok: true } };
+
+    const exit = runStdioWrapper({
+      command: MIXED_SERVER,
+      onClientFrame: forward,
+      onServerFrame: forward,
+      onMalformed: (raw, direction) => malformed.push([raw, direction]),
+      onMalformedResponse: (raw, direction) =>
+        direction === "server_to_client"
+          ? {
+              jsonrpc: "2.0",
+              id: null,
+              error: {
+                code: MCP_BLOCKED_ERROR_CODE,
+                message: "agentwall: malformed MCP response blocked",
+                data: { gate: "frame_integrity" },
+              },
+            }
+          : undefined,
+      stdin: h.stdin,
+      stdout: h.stdout,
+      stderr: h.stderr,
+    });
+
+    h.stdin.write(serializeFrame(request));
+    h.stdin.end();
+
+    expect(await exit).toBe(0);
+    expect(malformed).toEqual([[`{"jsonrpc":"2.0","id":22`, "server_to_client"]]);
+    expect(h.clientFrames()).toEqual([response, {
+      jsonrpc: "2.0",
+      id: null,
+      error: {
+        code: MCP_BLOCKED_ERROR_CODE,
+        message: "agentwall: malformed MCP response blocked",
+        data: { gate: "frame_integrity" },
+      },
+    }]);
   });
 
   it("blocks rather than forwards when an interceptor throws", async () => {

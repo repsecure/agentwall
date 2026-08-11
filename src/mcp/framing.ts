@@ -56,16 +56,17 @@ const EMPTY = Buffer.alloc(0);
 /**
  * Result of feeding bytes to the parser.
  *
- * Frames and malformed lines are separate channels rather than one tagged list
- * because callers treat them differently: frames go to the gates, malformed
- * lines go to the audit trail and nowhere else. Ordering is preserved within
- * each channel; a malformed line sitting between two good frames loses its
- * position relative to them, which costs log precision and nothing else,
- * because nothing malformed is ever forwarded.
+ * The frame and malformed arrays preserve the existing inspection API. Events add the wire order
+ * needed by transports that emit a response for malformed server input.
  */
+export type ParseEvent =
+  | { kind: "frame"; frame: JsonRpcFrame }
+  | { kind: "malformed"; raw: string };
+
 export interface ParseOutcome {
   frames: JsonRpcFrame[];
   malformed: string[];
+  events: ParseEvent[];
 }
 
 /** Stateful, single-stream parser. One per direction; never share instances. */
@@ -136,18 +137,21 @@ export function createFrameParser(opts: { maxFrameBytes?: number } = {}): FrameP
       parsed = JSON.parse(text);
     } catch {
       outcome.malformed.push(text);
+      outcome.events.push({ kind: "malformed", raw: text });
       return;
     }
 
     if (!isJsonRpcFrame(parsed)) {
       outcome.malformed.push(text);
+      outcome.events.push({ kind: "malformed", raw: text });
       return;
     }
     outcome.frames.push(parsed);
+    outcome.events.push({ kind: "frame", frame: parsed });
   }
 
   function push(chunk: Buffer): ParseOutcome {
-    const outcome: ParseOutcome = { frames: [], malformed: [] };
+    const outcome: ParseOutcome = { frames: [], malformed: [], events: [] };
     pending = pending.length === 0 ? chunk : Buffer.concat([pending, chunk]);
 
     for (;;) {
@@ -171,7 +175,9 @@ export function createFrameParser(opts: { maxFrameBytes?: number } = {}): FrameP
         // line is doomed whatever follows it, so report now and drop rather than
         // wait for a newline whose arrival the writer controls and may withhold.
         if (pending.length > maxFrameBytes) {
-          outcome.malformed.push(oversizeExcerpt(pending, maxFrameBytes));
+          const raw = oversizeExcerpt(pending, maxFrameBytes);
+          outcome.malformed.push(raw);
+          outcome.events.push({ kind: "malformed", raw });
           pending = EMPTY;
           resyncing = true;
         }
@@ -182,7 +188,9 @@ export function createFrameParser(opts: { maxFrameBytes?: number } = {}): FrameP
       pending = pending.subarray(nl + 1);
 
       if (line.length > maxFrameBytes) {
-        outcome.malformed.push(oversizeExcerpt(line, maxFrameBytes));
+        const raw = oversizeExcerpt(line, maxFrameBytes);
+        outcome.malformed.push(raw);
+        outcome.events.push({ kind: "malformed", raw });
         continue;
       }
       readLine(line, outcome);
@@ -200,7 +208,7 @@ export function createFrameParser(opts: { maxFrameBytes?: number } = {}): FrameP
    * "it looked complete" is how a truncated frame gets forwarded as a whole one.
    */
   function flush(): ParseOutcome {
-    const outcome: ParseOutcome = { frames: [], malformed: [] };
+    const outcome: ParseOutcome = { frames: [], malformed: [], events: [] };
     const tail = pending;
     pending = EMPTY;
     // Whatever remains of an over-long line has already been reported once.
@@ -215,7 +223,9 @@ export function createFrameParser(opts: { maxFrameBytes?: number } = {}): FrameP
     if (text.trim().length === 0) {
       return outcome;
     }
-    outcome.malformed.push(text);
+    const raw = text;
+    outcome.malformed.push(raw);
+    outcome.events.push({ kind: "malformed", raw });
     return outcome;
   }
 

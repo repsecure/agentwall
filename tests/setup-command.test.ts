@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it } from "@jest/globals";
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { dirname, join } from "path";
 import { createLocalOperatorFiles, loadGeneratedEnvironment, type LocalSetupOptions } from "../src/setup";
+import { loadDeclarativePolicyFile } from "../src/policy/loader";
 
 const options: LocalSetupOptions = {
   mode: "monitor",
@@ -46,6 +47,12 @@ describe("guided local setup", () => {
     expect(environment).toContain(`AGENTWALL_AUDIT_FILE=${result.auditPath}`);
     expect(result.dashboardUrl).toBe("http://127.0.0.1:3000");
     expect(result.created).toBe(true);
+  });
+
+  it("writes a policy that the AgentWall service can load with no approved hosts", () => {
+    const result = createLocalOperatorFiles(temporaryDirectory(), options);
+
+    expect(() => loadDeclarativePolicyFile(result.policyPath)).not.toThrow();
   });
 
   it("does not replace an existing config without force", () => {
@@ -112,5 +119,42 @@ describe("guided local setup", () => {
     expect(loaded.AGENTWALL_AUDIT_FILE).toBe("$(touch /tmp/agentwall-unsafe)");
     expect(loaded).not.toHaveProperty("UNRELATED_VALUE");
     expect(loaded).not.toHaveProperty("AGENTWALL_PROXY_HOST");
+  });
+});
+
+describe("starter allow-host safety", () => {
+  const unsafeHosts = ["localhost", "127.0.0.1", "[::1]", "metadata.google.internal"];
+
+  it.each(unsafeHosts)("refuses %s as an approved starter host", (host) => {
+    const directory = temporaryDirectory();
+
+    expect(() => createLocalOperatorFiles(directory, { ...options, allowedHosts: [host] })).toThrow(
+      /private or local host/i,
+    );
+
+    expect(existsSync(join(directory, "agentwall.config.yaml"))).toBe(false);
+    expect(existsSync(join(directory, "policy.yaml"))).toBe(false);
+    expect(existsSync(join(directory, ".agentwall", "operator.env"))).toBe(false);
+  });
+
+  it("names every unsafe host in one message", () => {
+    const directory = temporaryDirectory();
+
+    expect(() =>
+      createLocalOperatorFiles(directory, {
+        ...options,
+        allowedHosts: ["api.openai.com", "localhost", "10.0.0.5"],
+      }),
+    ).toThrow(/localhost, 10\.0\.0\.5/);
+  });
+
+  it("keeps a public approved host and writes a policy the service can load", () => {
+    const result = createLocalOperatorFiles(temporaryDirectory(), {
+      ...options,
+      allowedHosts: ["api.openai.com"],
+    });
+
+    expect(readFileSync(result.policyPath, "utf8")).toContain("api.openai.com");
+    expect(() => loadDeclarativePolicyFile(result.policyPath)).not.toThrow();
   });
 });

@@ -40,6 +40,8 @@ export interface StdioWrapOptions {
   onServerFrame: (frame: JsonRpcFrame) => Promise<FrameAction>;
   /** Called for every line that did not parse. Such lines are never forwarded. */
   onMalformed?: (raw: string, direction: FrameDirection) => void;
+  /** Optional protocol response for a malformed server-to-client line. */
+  onMalformedResponse?: (raw: string, direction: FrameDirection) => JsonRpcFrame | undefined;
   /** Injectable for tests; defaults to the wrapper process's own stdio. */
   stdin?: NodeJS.ReadableStream;
   stdout?: NodeJS.WritableStream;
@@ -257,16 +259,22 @@ export function runStdioWrapper(opts: StdioWrapOptions): Promise<number> {
     };
 
     const dispatch = (outcome: ParseOutcome, direction: FrameDirection): void => {
-      // Malformed lines ride the same chain as frames so their callbacks keep
-      // arrival order across chunks. Nothing malformed is forwarded in either
-      // case; the queue is only there to keep the audit sequence readable.
-      for (const raw of outcome.malformed) {
-        enqueue(direction, async () => {
-          opts.onMalformed?.(raw, direction);
-        });
-      }
-      for (const frame of outcome.frames) {
-        enqueue(direction, () => (direction === "client_to_server" ? handleClient(frame) : handleServer(frame)));
+      // Events retain the source order across valid and malformed lines. That order matters when
+      // malformed server input produces a protocol error on the client wire.
+      for (const event of outcome.events) {
+        if (event.kind === "malformed") {
+          enqueue(direction, async () => {
+            opts.onMalformed?.(event.raw, direction);
+            const response = opts.onMalformedResponse?.(event.raw, direction);
+            if (direction === "server_to_client" && response !== undefined) {
+              await write(clientOut, serializeFrame(response));
+            }
+          });
+          continue;
+        }
+        enqueue(direction, () =>
+          direction === "client_to_server" ? handleClient(event.frame) : handleServer(event.frame)
+        );
       }
     };
 

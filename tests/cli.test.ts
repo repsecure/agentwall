@@ -14,11 +14,81 @@ import {
   reportCliFailure,
   resolveApprovalMode,
 } from "../src/cli";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
+
+const previousOperatorToken = process.env.AGENTWALL_OPERATOR_TOKEN;
+const temporaryDirectories: string[] = [];
+
+/** A quiet dashboard payload, enough for `commandStatus --json` to print and return. */
+const QUIET_STATE = {
+  brand: "Agentwall",
+  generatedAt: new Date().toISOString(),
+  service: {
+    status: "operational",
+    attentionRequired: false,
+    operatorSummary: "Quiet runtime.",
+    host: "127.0.0.1",
+    port: 3000,
+  },
+  posture: {
+    highestRisk: "low",
+    pendingApprovals: 0,
+    criticalSignals: 0,
+    activeAgents: 1,
+    totalRequests: 4,
+  },
+  controls: { approvalMode: "auto" },
+  stats: { sessionCounts: {} },
+  priorityQueue: [],
+};
+
+function dashboardStateFetch() {
+  return jest.fn(async (_url: string, _init?: RequestInit) => ({
+    ok: true,
+    status: 200,
+    statusText: "OK",
+    text: async () => JSON.stringify(QUIET_STATE),
+  }));
+}
+
+function authorizationHeader(init: RequestInit | undefined): string | undefined {
+  return (init?.headers as Record<string, string> | undefined)?.authorization;
+}
+
+/**
+ * A setup directory that is not the working directory.
+ *
+ * `agentwall setup` writes the config and `.agentwall/operator.env` side by side, so the
+ * tests below point --config at a directory the test process never enters. That is the shape
+ * of a real operator who runs the CLI from a project while the service files live elsewhere.
+ */
+function temporaryOperatorDirectory(options: { host: string; port: number; token?: string }): string {
+  const directory = mkdtempSync(join(tmpdir(), "agentwall-cli-"));
+  temporaryDirectories.push(directory);
+  writeFileSync(join(directory, "agentwall.config.yaml"), `host: ${options.host}\nport: ${options.port}\n`);
+  if (options.token) {
+    mkdirSync(join(directory, ".agentwall"), { recursive: true });
+    writeFileSync(join(directory, ".agentwall", "operator.env"), `AGENTWALL_OPERATOR_TOKEN=${options.token}\n`, { mode: 0o600 });
+  }
+  return directory;
+}
 
 describe("Agentwall CLI helpers", () => {
   afterEach(() => {
-    jest.restoreAllMocks();
     delete (global as { fetch?: unknown }).fetch;
+    if (previousOperatorToken === undefined) {
+      delete process.env.AGENTWALL_OPERATOR_TOKEN;
+    } else {
+      process.env.AGENTWALL_OPERATOR_TOKEN = previousOperatorToken;
+    }
+    for (const directory of temporaryDirectories.splice(0)) {
+      rmSync(directory, { recursive: true, force: true });
+    }
+    // Spies here replace console and process globals. Left installed they follow the suite
+    // into every later test, so the cleanup restores them beside the environment it resets.
+    jest.restoreAllMocks();
   });
 
   it("parses flags and positional arguments together", () => {
@@ -740,12 +810,16 @@ describe("Agentwall CLI helpers", () => {
     }));
     (global as { fetch?: unknown }).fetch = fetchMock;
     const logSpy = jest.spyOn(console, "log").mockImplementation(() => undefined);
+    process.env.AGENTWALL_OPERATOR_TOKEN = "test-operator-token";
 
     await commandStatus({ url: "http://127.0.0.1:3000", json: true });
 
     expect(fetchMock).toHaveBeenCalledWith(
       "http://127.0.0.1:3000/api/dashboard/state",
-      expect.objectContaining({ method: "GET" })
+      expect.objectContaining({
+        method: "GET",
+        headers: { authorization: "Bearer test-operator-token" },
+      })
     );
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('"brand": "Agentwall"'));
   });
@@ -838,5 +912,159 @@ describe("Agentwall CLI helpers", () => {
       })
     );
     expect(logSpy).toHaveBeenCalledWith("FloodGuard override cleared for session-42 · target http://127.0.0.1:3000");
+  });
+
+  it("keeps the operator token off a target that is not this host's Agentwall", async () => {
+    const fetchMock = dashboardStateFetch();
+    (global as { fetch?: unknown }).fetch = fetchMock;
+    jest.spyOn(console, "log").mockImplementation(() => undefined);
+    process.env.AGENTWALL_OPERATOR_TOKEN = "test-operator-token";
+
+    await commandStatus({ url: "http://attacker.example.com:3000", json: true });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://attacker.example.com:3000/api/dashboard/state",
+      expect.objectContaining({ method: "GET" })
+    );
+    expect(authorizationHeader(fetchMock.mock.calls[0][1])).toBeUndefined();
+  });
+
+  it("sends the operator token to the configured loopback origin", async () => {
+    const fetchMock = dashboardStateFetch();
+    (global as { fetch?: unknown }).fetch = fetchMock;
+    jest.spyOn(console, "log").mockImplementation(() => undefined);
+    process.env.AGENTWALL_OPERATOR_TOKEN = "test-operator-token";
+
+    await commandStatus({ url: "http://127.0.0.1:3000", json: true });
+
+    expect(authorizationHeader(fetchMock.mock.calls[0][1])).toBe("Bearer test-operator-token");
+  });
+
+  it("keeps the operator token off another loopback address on the configured port", async () => {
+    const fetchMock = dashboardStateFetch();
+    (global as { fetch?: unknown }).fetch = fetchMock;
+    jest.spyOn(console, "log").mockImplementation(() => undefined);
+    process.env.AGENTWALL_OPERATOR_TOKEN = "test-operator-token";
+
+    await commandStatus({ url: "http://127.0.0.2:3000", json: true });
+
+    expect(authorizationHeader(fetchMock.mock.calls[0][1])).toBeUndefined();
+  });
+  it("keeps the operator token off an HTTPS loopback alias for an HTTP wildcard bind", async () => {
+    const directory = temporaryOperatorDirectory({ host: "0.0.0.0", port: 3000 });
+    const fetchMock = dashboardStateFetch();
+    (global as { fetch?: unknown }).fetch = fetchMock;
+    jest.spyOn(console, "log").mockImplementation(() => undefined);
+    process.env.AGENTWALL_OPERATOR_TOKEN = "test-operator-token";
+
+    await commandStatus({
+      url: "https://127.0.0.1:3000",
+      config: join(directory, "agentwall.config.yaml"),
+      json: true,
+    });
+
+    expect(authorizationHeader(fetchMock.mock.calls[0][1])).toBeUndefined();
+  });
+
+  it("keeps the operator token off an unrelated loopback port", async () => {
+    const fetchMock = dashboardStateFetch();
+    (global as { fetch?: unknown }).fetch = fetchMock;
+    jest.spyOn(console, "log").mockImplementation(() => undefined);
+    process.env.AGENTWALL_OPERATOR_TOKEN = "test-operator-token";
+
+    await commandStatus({ url: "http://localhost:3001", json: true });
+
+    expect(authorizationHeader(fetchMock.mock.calls[0][1])).toBeUndefined();
+  });
+
+
+  it("sends the operator token to the origin the resolved config declares", async () => {
+    const directory = temporaryOperatorDirectory({ host: "10.1.2.3", port: 4321 });
+    const fetchMock = dashboardStateFetch();
+    (global as { fetch?: unknown }).fetch = fetchMock;
+    jest.spyOn(console, "log").mockImplementation(() => undefined);
+    process.env.AGENTWALL_OPERATOR_TOKEN = "test-operator-token";
+
+    await commandStatus({ url: "http://10.1.2.3:4321", config: join(directory, "agentwall.config.yaml"), json: true });
+
+    expect(authorizationHeader(fetchMock.mock.calls[0][1])).toBe("Bearer test-operator-token");
+  });
+
+  it("keeps the operator token off another host that shares the configured port", async () => {
+    const directory = temporaryOperatorDirectory({ host: "10.1.2.3", port: 4321 });
+    const fetchMock = dashboardStateFetch();
+    (global as { fetch?: unknown }).fetch = fetchMock;
+    jest.spyOn(console, "log").mockImplementation(() => undefined);
+    process.env.AGENTWALL_OPERATOR_TOKEN = "test-operator-token";
+
+    await commandStatus({ url: "http://10.9.9.9:4321", config: join(directory, "agentwall.config.yaml"), json: true });
+
+    expect(authorizationHeader(fetchMock.mock.calls[0][1])).toBeUndefined();
+  });
+
+  it("reads the generated operator token from the config directory, not the working directory", async () => {
+    const directory = temporaryOperatorDirectory({ host: "127.0.0.1", port: 3000, token: "generated-operator-token" });
+    const fetchMock = dashboardStateFetch();
+    (global as { fetch?: unknown }).fetch = fetchMock;
+    jest.spyOn(console, "log").mockImplementation(() => undefined);
+    delete process.env.AGENTWALL_OPERATOR_TOKEN;
+
+    await commandStatus({ config: join(directory, "agentwall.config.yaml"), json: true });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:3000/api/dashboard/state",
+      expect.objectContaining({ method: "GET" })
+    );
+    expect(authorizationHeader(fetchMock.mock.calls[0][1])).toBe("Bearer generated-operator-token");
+  });
+  it("does not borrow a current-directory token for an external config", async () => {
+    const configuredDirectory = temporaryOperatorDirectory({ host: "10.1.2.3", port: 4321 });
+    const workingDirectory = temporaryOperatorDirectory({
+      host: "127.0.0.1",
+      port: 3000,
+      token: "wrong-instance-token",
+    });
+    const previousDirectory = process.cwd();
+    process.chdir(workingDirectory);
+
+    const fetchMock = dashboardStateFetch();
+    (global as { fetch?: unknown }).fetch = fetchMock;
+    jest.spyOn(console, "log").mockImplementation(() => undefined);
+    delete process.env.AGENTWALL_OPERATOR_TOKEN;
+
+    try {
+      await commandStatus({
+        url: "http://10.1.2.3:4321",
+        config: join(configuredDirectory, "agentwall.config.yaml"),
+        json: true,
+      });
+    } finally {
+      process.chdir(previousDirectory);
+    }
+
+    expect(authorizationHeader(fetchMock.mock.calls[0][1])).toBeUndefined();
+  });
+
+
+  it("names the unreadable operator environment instead of leaking a raw read error", async () => {
+    const directory = temporaryOperatorDirectory({ host: "127.0.0.1", port: 3000 });
+    // A directory where the file belongs fails the read for every user, including root, so
+    // this covers the same escape path as a bad mode without depending on who runs the suite.
+    mkdirSync(join(directory, ".agentwall", "operator.env"), { recursive: true });
+    const fetchMock = dashboardStateFetch();
+    (global as { fetch?: unknown }).fetch = fetchMock;
+    delete process.env.AGENTWALL_OPERATOR_TOKEN;
+
+    await expect(commandStatus({ config: join(directory, "agentwall.config.yaml"), json: true }))
+      .rejects.toThrow(/generated operator environment/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  // Last on purpose. It asserts the suite's own cleanup, so it needs the tests above to have
+  // installed the spies it checks for.
+  it("restores every spy between tests", () => {
+    expect(jest.isMockFunction(console.log)).toBe(false);
+    expect(jest.isMockFunction(console.error)).toBe(false);
+    expect(jest.isMockFunction(process.exit)).toBe(false);
   });
 });

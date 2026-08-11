@@ -343,7 +343,7 @@ interface FrameHandling {
   /** Gate one frame and record the verdict. Returns what the transport should do with it. */
   handleFrame(frame: JsonRpcFrame, direction: FrameDirection): Promise<FrameAction>;
   /** Record a payload that never became a frame, so a transport-level refusal is still evidence. */
-  recordMalformed(raw: string, direction: FrameDirection): void;
+  recordMalformed(raw: string, direction: FrameDirection): JsonRpcFrame | undefined;
 }
 
 /**
@@ -630,7 +630,7 @@ function createFrameHandling(args: {
       return { kind: "forward", frame: forwarded };
     },
 
-    recordMalformed(raw: string, direction: FrameDirection): void {
+    recordMalformed(raw: string, direction: FrameDirection): JsonRpcFrame | undefined {
       // A payload that does not parse cannot be evaluated, so the transport does not forward it and
       // the record says deny rather than leaving a silent hole where a frame went missing. Only the
       // byte count is kept: the bytes themselves are unvalidated input that may carry exactly the
@@ -651,6 +651,16 @@ function createFrameHandling(args: {
           detections: [],
         },
       });
+      if (direction !== "server_to_client") return undefined;
+      return {
+        jsonrpc: "2.0",
+        id: null,
+        error: {
+          code: MCP_BLOCKED_ERROR_CODE,
+          message: "agentwall: malformed MCP response blocked",
+          data: { gate: "frame_integrity" },
+        },
+      };
     },
   };
 }
@@ -680,7 +690,7 @@ export async function runMcpWrap(opts: WrapOptions): Promise<number> {
     command: opts.command,
     onClientFrame: (frame) => handling.handleFrame(frame, "client_to_server"),
     onServerFrame: (frame) => handling.handleFrame(frame, "server_to_client"),
-    onMalformed: (raw, direction) => handling.recordMalformed(raw, direction),
+    onMalformedResponse: (raw, direction) => handling.recordMalformed(raw, direction),
     stdin: opts.stdin,
     stdout: opts.stdout,
     stderr: opts.stderr,

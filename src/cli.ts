@@ -927,6 +927,96 @@ function loadCliConfig(flags: CliFlags) {
   return loadConfig(configPath);
 }
 
+/**
+ * A wildcard bind can admit a loopback address in the same address family.
+ * A specific bind must use its exact configured origin.
+ */
+function normalizeHostname(hostname: string): string {
+  return hostname.replace(/^\[|\]$/g, "").toLowerCase();
+}
+
+function isIpv4LoopbackHostname(hostname: string): boolean {
+  return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(normalizeHostname(hostname));
+}
+
+function isIpv6LoopbackHostname(hostname: string): boolean {
+  const host = normalizeHostname(hostname);
+  return host === "::1" || host === "0:0:0:0:0:0:0:1";
+}
+
+function isWildcardHostname(hostname: string): boolean {
+  const host = normalizeHostname(hostname);
+  return host === "0.0.0.0" || host === "::";
+}
+
+function isWildcardLoopbackAlias(configuredHost: string, targetHost: string): boolean {
+  const configured = normalizeHostname(configuredHost);
+  if (configured === "0.0.0.0") return isIpv4LoopbackHostname(targetHost);
+  if (configured === "::") return isIpv6LoopbackHostname(targetHost);
+  return false;
+}
+
+function effectivePort(target: URL): number {
+  if (target.port) return Number(target.port);
+  return target.protocol === "https:" ? 443 : 80;
+}
+
+function configUrlHost(hostname: string): string {
+  return hostname.includes(":") && !hostname.startsWith("[") ? `[${hostname}]` : hostname;
+}
+
+/**
+ * Is this address the Agentwall that this host runs?
+ *
+ * The operator token is the credential that controls this machine, and `--url` accepts any
+ * address. Attached to an arbitrary target, that credential goes to whoever answers, which
+ * turns a mistyped or attacker-supplied flag into a full handover. The target must use the
+ * configured service port. A loopback hostname alias is valid only when the configured bind is
+ * wildcard.
+ */
+function isOwnControlPlane(baseUrl: string, flags: CliFlags): boolean {
+  let target: URL;
+  try {
+    target = new URL(baseUrl);
+  } catch {
+    return false;
+  }
+
+  try {
+    const config = loadCliConfig(flags);
+    if (effectivePort(target) !== config.port) return false;
+
+    const configuredOrigin = new URL(`http://${configUrlHost(config.host)}:${config.port}`).origin;
+    if (target.origin === configuredOrigin) return true;
+
+    return target.protocol === "http:" && isWildcardHostname(config.host) && isWildcardLoopbackAlias(config.host, target.hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The generated operator environment for the Agentwall this command targets.
+ *
+ * `agentwall setup` writes `.agentwall/operator.env` beside the config it generates. A
+ * command that names an external config with --config uses only the environment beside that
+ * config. It uses the working directory environment only when the selected config is there or
+ * when no config file exists. This prevents one Agentwall instance from receiving another's token.
+ */
+function generatedOperatorEnvironment(flags: CliFlags): Record<string, string> {
+  const configSource = resolveConfigSource(typeof flags.config === "string" ? flags.config : undefined);
+  const configDirectory = configSource ? path.dirname(configSource) : null;
+  if (configDirectory && configDirectory !== process.cwd()) {
+    return loadGeneratedEnvironment(configDirectory);
+  }
+  return loadGeneratedEnvironment(process.cwd());
+}
+
+/** The operator token for this target, explicit environment first, generated file second. */
+function resolveOperatorToken(flags: CliFlags): string | undefined {
+  return process.env.AGENTWALL_OPERATOR_TOKEN ?? generatedOperatorEnvironment(flags).AGENTWALL_OPERATOR_TOKEN;
+}
+
 export function createBaseUrl(flags: CliFlags): string {
   if (typeof flags.url === "string" && flags.url.trim().length > 0) {
     return flags.url.replace(/\/$/, "");
@@ -1130,10 +1220,14 @@ function formatConnectionError(baseUrl: string, endpoint: string, error: unknown
 async function requestJson<T>(method: string, endpoint: string, body?: unknown, flags: CliFlags = {}): Promise<T> {
   const baseUrl = createBaseUrl(flags);
   let response: Response;
+  const operatorTokenValue = isOwnControlPlane(baseUrl, flags) ? resolveOperatorToken(flags) : undefined;
+  const headers: Record<string, string> = {};
+  if (operatorTokenValue) headers.authorization = `Bearer ${operatorTokenValue}`;
+  if (body) headers["content-type"] = "application/json";
   try {
     response = await fetch(`${baseUrl}${endpoint}`, {
       method,
-      headers: body ? { "content-type": "application/json" } : undefined,
+      headers: Object.keys(headers).length > 0 ? headers : undefined,
       body: body ? JSON.stringify(body) : undefined,
     });
   } catch (error) {
@@ -1652,9 +1746,8 @@ function responseOutput(body: unknown): string | undefined {
   return typeof data.output === "string" ? data.output : undefined;
 }
 
-function operatorToken(): string {
-  const generatedEnvironment = loadGeneratedEnvironment(process.cwd());
-  const token = process.env.AGENTWALL_OPERATOR_TOKEN ?? generatedEnvironment.AGENTWALL_OPERATOR_TOKEN;
+function operatorToken(flags: CliFlags): string {
+  const token = resolveOperatorToken(flags);
   if (!token) {
     throw new Error("This MCP control needs AGENTWALL_OPERATOR_TOKEN or a generated operator environment.");
   }
@@ -1662,10 +1755,20 @@ function operatorToken(): string {
 }
 
 async function postOperatorAction(flags: CliFlags, payload: Record<string, unknown>): Promise<{ message?: string; output?: string }> {
-  const response = await fetch(`${createBaseUrl(flags)}/api/operator/actions`, {
+  const baseUrl = createBaseUrl(flags);
+  // Checked before the token is read, not after the response comes back. An MCP control that
+  // finds out it hit the wrong target has already given the credential away.
+  if (!isOwnControlPlane(baseUrl, flags)) {
+    throw new Error(
+      `This MCP control does not send the operator token to ${baseUrl}. The CLI authenticates only to the configured Agentwall origin. ` +
+        `A wildcard bind may use a same-family loopback address over HTTP. Remove --url, or set it to that origin.`
+    );
+  }
+
+  const response = await fetch(`${baseUrl}/api/operator/actions`, {
     method: "POST",
     headers: {
-      authorization: `Bearer ${operatorToken()}`,
+      authorization: `Bearer ${operatorToken(flags)}`,
       "content-type": "application/json",
     },
     body: JSON.stringify(payload),
