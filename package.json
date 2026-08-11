@@ -25,6 +25,8 @@
     "bench": "ts-node bench/run.ts",
     "conformance": "node scripts/conformance.js",
     "check:public-copy": "node scripts/check-public-copy.js",
+    "check:brand": "node scripts/check-brand-assets.js",
+    "check:readme": "node scripts/check-readme.js README.md",
     "lint": "tsc --noEmit",
     "cli": "node dist/cli.js",
     "init": "node dist/cli.js init",
@@ -56,6 +58,8 @@
     "@jest/globals": "^30.4.1",
     "@types/node": "^22.20.1",
     "jest": "^30.4.2",
+    "marked": "^18.0.9",
+    "parse5": "8.0.1",
     "ts-jest": "^29.4.12",
     "ts-node": "^10.9.2",
     "typescript": "^5.3.3"
