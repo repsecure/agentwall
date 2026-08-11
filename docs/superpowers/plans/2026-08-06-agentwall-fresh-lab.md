@@ -179,7 +179,7 @@ The Gateway runs on loopback, the provider points to the deterministic fixture, 
 2. Run `npm ci`, `npm run build`, and the repository test command.
 3. Install the package from the local build so the `agentwall` command uses the tested commit.
 4. Run `agentwall setup --mode monitor` in the lab work directory.
-5. Run `agentwall onboard openclaw --json --allow model.test,127.0.0.1` and keep the returned secret only in the current process environment.
+5. Run `agentwall onboard openclaw --json --allow model.test` and keep the returned secret only in the current process environment.
 6. Set `AGENTWALL_PROXY_PORT=3128`, `AGENTWALL_AUDIT_FILE=/var/lib/agentwall-lab/evidence/<run-id>/audit.jsonl`, and the generated OpenClaw proxy variables.
 7. Start AgentWall and verify `/health`, `/ready`, `agentwall status --json`, and the bootstrap UI.
 8. Run `agentwall verify-capture --agent openclaw --json` before any other scenario.

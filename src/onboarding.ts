@@ -3,6 +3,7 @@ import * as path from "path";
 import * as readline from "readline";
 import * as yaml from "js-yaml";
 import { AgentwallConfig } from "./config";
+import { isPrivateHostname, isPrivateIp } from "./planes/network/ssrf";
 
 export type OnboardingMode = "monitor" | "guarded" | "strict";
 
@@ -51,7 +52,28 @@ export const defaultConfig: AgentwallConfig = {
   },
 };
 
+/**
+ * Every writer of the starter files — interactive onboarding, `agentwall init`, the guided
+ * setup command and the bootstrap UI routes — builds its policy through createStarterConfig.
+ * Rejecting unsafe destinations here is the only place that covers all four before any file
+ * is written. Without it setup wrote a hostname-equals rule that the policy loader refuses,
+ * so the operator learned about the bad value only when the service failed to start.
+ *
+ * The SSRF helpers own the detection. They normalise the value first, so a bracketed IPv6
+ * literal, a rooted name such as "localhost." and an IPv4-mapped address are all caught.
+ */
+function assertPublicStarterHosts(allowedHosts: string[]): void {
+  const unsafe = allowedHosts.filter((host) => isPrivateHostname(host) || isPrivateIp(host));
+  if (unsafe.length === 0) return;
+
+  throw new Error(
+    `Starter setup cannot allow private or local hosts: ${unsafe.join(", ")}. Use public hostnames.`,
+  );
+}
+
 export function createStarterConfig(input: OnboardingOptions): { config: AgentwallConfig; policy: Record<string, unknown> } {
+  assertPublicStarterHosts(input.allowedHosts);
+
   const mode = input.mode;
   const config: AgentwallConfig = {
     ...defaultConfig,

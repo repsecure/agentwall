@@ -152,9 +152,27 @@ export function loadGeneratedEnvironment(baseDir: string): Record<string, string
   const generated: Record<string, string> = {};
   const environmentPath = path.resolve(baseDir, OPERATOR_DIRECTORY, OPERATOR_ENVIRONMENT);
 
-  if (fs.existsSync(environmentPath)) {
-    const lines = fs.readFileSync(environmentPath, "utf8").split(/\r?\n/);
-    for (const line of lines) {
+  let contents: string | null = null;
+  try {
+    contents = fs.readFileSync(environmentPath, "utf8");
+  } catch (error) {
+    // Only a missing file is normal: that is the state before `agentwall setup` runs. Every
+    // other failure - a directory in the file's place, a plain file where `.agentwall/`
+    // belongs, a mode nobody can read, a broken mount - is a real fault, and the errno that
+    // fs throws names neither the file nor the fix. Reported here rather than left to escape,
+    // because the caller is usually mid-request and would otherwise print a bare EISDIR where
+    // a target and a remedy belong.
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `Could not read the generated operator environment at ${environmentPath}: ${detail}. ` +
+          `Repair that file or delete it, then run agentwall setup again.`,
+      );
+    }
+  }
+
+  if (contents !== null) {
+    for (const line of contents.split(/\r?\n/)) {
       const match = /^([A-Z][A-Z0-9_]*)=(.*)$/.exec(line);
       if (!match || !GENERATED_ENVIRONMENT_KEY_SET.has(match[1])) continue;
       generated[match[1]] = match[2];
