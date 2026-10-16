@@ -152,19 +152,44 @@ describeLinux("doctor reports capture from a chain a real server wrote", () => {
    */
   let baselineTotal = 0;
 
-  /** Run the real CLI, from a directory whose install checks pass, and hand back both faces. */
-  const doctor = (json: boolean): { status: number; stdout: string } => {
+  /**
+   * Run the real CLI, from a directory whose install checks pass, and keep the two streams apart.
+   *
+   * `--json` is one document on stdout. Diagnostics belong on stderr. The spawn forces
+   * NO_COLOR and FORCE_COLOR together so Node prints its "NO_COLOR is ignored" warning on
+   * stderr before user code runs. Splicing that warning onto the document makes JSON.parse
+   * fail on a report the command printed correctly, and only on machines where a parent
+   * already exported both variables, which is why the conflict is set here rather than
+   * inherited. Text assertions read stdout, where the renderer writes. doctorJson attaches
+   * stderr when stdout is not JSON, so a crash is not silent.
+   */
+  const doctor = (json: boolean): { status: number; stdout: string; stderr: string } => {
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      AGENTWALL_AUDIT_FILE: auditPath,
+      NO_COLOR: "1",
+      FORCE_COLOR: "1",
+    };
     const result = spawnSync(
       process.execPath,
       [join(__dirname, "..", "dist", "cli.js"), "doctor", "--audit", auditPath, "--config", configPath, ...(json ? ["--json"] : [])],
-      { cwd: workdir, encoding: "utf8", env: { ...process.env, AGENTWALL_AUDIT_FILE: auditPath } },
+      { cwd: workdir, encoding: "utf8", env },
     );
-    return { status: result.status ?? -1, stdout: `${result.stdout ?? ""}${result.stderr ?? ""}` };
+    return {
+      status: result.status ?? -1,
+      stdout: result.stdout ?? "",
+      stderr: result.stderr ?? "",
+    };
   };
 
   const doctorJson = (): { status: number; payload: DoctorJson } => {
-    const { status, stdout } = doctor(true);
-    return { status, payload: JSON.parse(stdout) as DoctorJson };
+    const { status, stdout, stderr } = doctor(true);
+    try {
+      return { status, payload: JSON.parse(stdout) as DoctorJson };
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(`doctor --json did not print a JSON document (status ${status}).\n${detail}\nstderr:\n${stderr}`);
+    }
   };
 
   beforeAll(async () => {
